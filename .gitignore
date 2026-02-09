@@ -1,0 +1,19 @@
+# Environment / secrets
+.env
+app/.env
+server/.env
+
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+server/dist/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Expo
+.expo/
+

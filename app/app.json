@@ -1,0 +1,60 @@
+{
+  "expo": {
+    "name": "Speak Oculus",
+    "slug": "speak-vision",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Speak Vision needs microphone access for voice conversations with AI.",
+        "NSCameraUsageDescription": "Speak Vision needs camera access for the viewfinder.",
+        "NSMotionUsageDescription": "Speak Vision uses motion data to detect when you hold the device steady for automatic vision capture."
+      },
+      "bundleIdentifier": "com.anonymous.speakvision"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "usesCleartextTraffic": true,
+      "hardwareAccelerated": true,
+      "permissions": [
+        "RECORD_AUDIO",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.INTERNET",
+        "android.permission.CAMERA",
+        "android.permission.HIGH_SAMPLING_RATE_SENSORS",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK"
+      ],
+      "package": "com.anonymous.speakvision"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Speak Vision needs camera access for the viewfinder.",
+          "microphonePermission": "Speak Vision needs microphone access for voice conversations with AI."
+        }
+      ],
+      "expo-font",
+      "./plugins/withHighRefreshRate.js"
+    ]
+  }
+}
