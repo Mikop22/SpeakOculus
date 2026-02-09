@@ -2,7 +2,7 @@
 
 A real-time Voice AI language tutor that combines live conversation, computer vision, and spaced vocabulary tracking into a FaceTime-like mobile experience.
 
-Point your camera at an object, and the AI sees it and weaves it into the conversation — in your target language.
+Point your camera at an object, and the AI sees it and weaves it into the conversation in your target language.
 
 ---
 
@@ -24,7 +24,7 @@ React Native App  ←— WebSocket —→  Node.js Relay (EC2)  ←— WebSocket
 
 **Relay Server** — A lightweight Node.js WebSocket proxy on AWS EC2 (us-east-1). Exists for two reasons: (1) the OpenAI API key never touches the client, and (2) deploying right beside OpenAI's servers saves ~200ms of round-trip latency. Beyond forwarding bytes, the relay handles image injection into OpenAI's multimodal format and the vocabulary tracking tool loop.
 
-**OpenAI Realtime API** — `gpt-realtime-mini`. Handles all the heavy lifting: voice activity detection (VAD), Whisper transcription, response generation, audio synthesis, tool calling, and vision. The relay is intentionally thin — OpenAI does the work.
+**OpenAI Realtime API** — `gpt-realtime-mini`. Handles all the heavy lifting: voice activity detection (VAD), Whisper transcription, response generation, audio synthesis, tool calling, and vision. The relay is intentionally thin so OpenAI does the work.
 
 ---
 
@@ -63,7 +63,7 @@ When the user holds the camera steady for 1.2 seconds, the app captures a frame,
 
 - **Real-time voice conversation** — Full-duplex audio over WebSocket. 24kHz PCM16, 40ms chunks. Gapless playback scheduling eliminates audio gaps from network jitter.
 - **Computer vision** — Accelerometer-based stability detection triggers automatic photo capture. The AI sees what you see and discusses it in your target language.
-- **Vocabulary tracking (Friend Loop)** — When you drop an English word mid-sentence, the AI logs it as a "gap word," recasts it naturally, and remembers it for future sessions. Based on SLA research: recast > lecture, one correction per turn, three-turn cooldown.
+- **Vocabulary tracking** — When you drop an English word mid-sentence, the AI logs it as a "gap word," recasts it naturally, and remembers it for future sessions. Based on SLA research: recast > lecture, one correction per turn, three-turn cooldown.
 - **Optimistic barge-in** — Interrupt the AI mid-sentence with near-zero perceived delay using client-side speech detection on the AEC-cleaned mic signal.
 - **Hardware echo cancellation** — `VOICE_COMMUNICATION` audio source routes mic input through the device's AEC pipeline, reducing echo RMS to 0.0000 during AI playback.
 
@@ -136,4 +136,4 @@ Set the relay URL via `EXPO_PUBLIC_RELAY_URL` in `app/.env` (see `app/.env.examp
 
 ## Design Document
 
-For the full technical deep-dive — audio pipeline internals, barge-in detection, animation system, backpressure strategy, memory budgets, and sequence diagrams — see [DESIGN.md](./DESIGN.md).
+For a deep-dive into PCM16 pipeline, barge-in detection, animation system, backpressure strategy, memory budgets see [DESIGN.md](./DESIGN.md).
