@@ -1,10 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import dotenv from 'dotenv';
 import path from 'path';
-
-// ── Environment Setup ────────────────────────────────────────────────────────
-// Hunt for the .env file in a few likely spots. If we're running from dist/,
-// __dirname points there, so we check the project root first.
 const envPaths = [
     path.resolve(__dirname, '../.env'),            // up one level (project root when in dist/)
     path.resolve(__dirname, '.env'),               // right next to the script
@@ -23,7 +19,7 @@ const PORT = 8082;
 const HOST = '0.0.0.0'; // listen on all interfaces so AWS EC2 (and LAN devices) can reach us
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
 
-// ── Stability & Safety Constants ─────────────────────────────────────────────
+// ── Stability & Safety Constants
 
 // Ping every 30s so AWS load balancers and home routers don't kill idle sockets
 const PING_INTERVAL_MS = 30_000;
@@ -56,7 +52,7 @@ const wss = new WebSocketServer({
 console.log(`[RELAY] Server running on ${HOST}:${PORT}`);
 console.log('[RELAY] Waiting for client connections...');
 
-// ── Session Config (OpenAI Realtime API) ─────────────────────────────────────
+// Session Config (OpenAI Realtime API) 
 // Fallback personality — the client usually overrides this with agent.config
 const DEFAULT_INSTRUCTIONS = `
 You are a friendly, helpful AI assistant.
@@ -81,7 +77,7 @@ const SESSION_CONFIG = {
         prefix_padding_ms: 300,
         silence_duration_ms: 500, // short pause = snappy turn-taking
     },
-    // ── Tools (the Friend Loop) ───────────────────────────────────────────
+    // ── Tools
     tools: [
         {
             type: 'function',
@@ -111,7 +107,7 @@ const SESSION_CONFIG = {
     tool_choice: 'auto',
 };
 
-// ── Critical Events ──────────────────────────────────────────────────────────
+// ── Critical Events 
 // These are the events the frontend actually cares about for keeping the UI in sync.
 const CRITICAL_EVENTS = [
     'session.created',                          // we're in — client can show "connected"
@@ -126,7 +122,7 @@ const CRITICAL_EVENTS = [
     'error',                                    // something broke
 ];
 
-// ── Connection Handler ───────────────────────────────────────────────────────
+// ── Connection Handler 
 // Every client gets its own dedicated OpenAI session — strictly 1:1.
 wss.on('connection', (clientWs: WebSocket) => {
     const clientId = Date.now().toString(36); // quick & dirty unique id for logs
@@ -140,7 +136,7 @@ wss.on('connection', (clientWs: WebSocket) => {
     let clientIsAlive = true;
     let openAiIsAlive = true;
 
-    // ── Session Memory (Friend Loop) ───────────────────────────────────────
+    // ── Session Memory
     // Words the user blanked on during this conversation (capped, oldest get tossed)
     let gapWords: Array<{ native: string; target: string }> = [];
     // The persona prompt — agent.config replaces this wholesale, never appended to
@@ -151,7 +147,7 @@ wss.on('connection', (clientWs: WebSocket) => {
     // Batches rapid tool calls so we don't hammer OpenAI with back-to-back session.updates
     let contextUpdateTimer: NodeJS.Timeout | null = null;
 
-    // ── addGapWord ────────────────────────────────────────────────────────
+    // ── addGapWord 
     // Stash a word the user forgot. Skips dupes, evicts the oldest if we're full.
     const addGapWord = (native: string, target: string): void => {
         // already got this one — no need to log it again
@@ -173,7 +169,7 @@ wss.on('connection', (clientWs: WebSocket) => {
         console.log(`[MEMORY] Logged gap word for ${clientId}: "${native}" -> "${target}" (${gapWords.length}/${MAX_GAP_WORDS})`);
     };
 
-    // ── buildInstructionsWithContext ────────────────────────────────────────
+    // ── buildInstructionsWithContext
     // Rebuilds the full prompt from scratch each time: base persona + the last
     // few gap words. This way we never grow instructions without bound.
     const buildInstructionsWithContext = (): string => {
@@ -202,7 +198,7 @@ Do NOT quiz them on these words. When a natural opportunity arises (topic change
         return fullInstructions;
     };
 
-    // ── scheduleContextUpdate ─────────────────────────────────────────────
+    // ── scheduleContextUpdate 
     // Waits a beat before pushing new context to OpenAI, so a burst of tool
     // calls collapses into one update instead of flooding the API.
     const scheduleContextUpdate = (): void => {
@@ -229,7 +225,7 @@ Do NOT quiz them on these words. When a natural opportunity arises (topic change
         }, CONTEXT_UPDATE_DEBOUNCE_MS);
     };
 
-    // ── cleanup — the "billing saver" ──────────────────────────────────────
+    // ── cleanup 
     // When either side drops, tear everything down so we don't leave a ghost
     // session silently burning API credits.
     const cleanup = (reason: string) => {
@@ -274,7 +270,7 @@ Do NOT quiz them on these words. When a natural opportunity arises (topic change
         console.log(`[RELAY] Session ${clientId} fully cleaned up (listeners removed, state cleared)`);
     };
 
-    // ── applyAgentConfig ──────────────────────────────────────────────────
+    // ── applyAgentConfig
     // Builds the full "friend mode" persona prompt and pushes it to OpenAI.
     const applyAgentConfig = (name: string, language: string) => {
         // this replaces baseInstructions entirely — context injection rebuilds
@@ -447,10 +443,8 @@ Also bad: "On dit 'magasin' pour 'store', et 'nourriture' pour 'food'. Aussi, c'
                 console.log(`[RELAY] Speech started - interrupting client ${clientId}`);
             }
 
-            // =================================================================
-            // TOOL CALL HANDLER (Phase 3.0 - The Friend Loop)
+            // TOOL CALL HANDLER
             // When OpenAI calls a function, we handle it here.
-            // =================================================================
             if (eventType === 'response.function_call_arguments.done') {
                 const { call_id, name, arguments: argsJson } = response;
 
@@ -544,10 +538,7 @@ Also bad: "On dit 'magasin' pour 'store', et 'nourriture' pour 'food'. Aussi, c'
         cleanup('OpenAI socket error');
     });
 
-    // -------------------------------------------------------------------------
     // DOWNSTREAM CONNECTION - Client <-> Relay
-    // -------------------------------------------------------------------------
-
     // Client Message Received - Forward to OpenAI
     clientWs.on('message', (data: any) => {
         try {
@@ -560,14 +551,9 @@ Also bad: "On dit 'magasin' pour 'store', et 'nourriture' pour 'food'. Aussi, c'
             }
 
             // =================================================================
-            // VISION DIRECT INJECTION HANDLER (Phase 2.1)
+            // VISION DIRECT INJECTION HANDLER
             // Injects images directly into the active OpenAI Realtime session
             // as a user message with multimodal content (text + image).
-            //
-            // Documentation confirms format uses:
-            //   - type: 'input_image'
-            //   - image_url: 'data:image/jpeg;base64,...' (data URI format)
-            // =================================================================
             if (messageType === 'vision.direct_injection') {
                 const base64Image = message.image;
 
@@ -645,10 +631,7 @@ Also bad: "On dit 'magasin' pour 'store', et 'nourriture' pour 'food'. Aussi, c'
                 return; // Don't forward vision.direct_injection to OpenAI as-is
             }
 
-            // =================================================================
-            // DYNAMIC PERSONA HANDLER (Phase 3.0 - The Friend Loop)
-            // Client sends agent config (name, language) to set up Friend Mode.
-            // =================================================================
+            // DYNAMIC PERSONA HANDLER 
             if (messageType === 'agent.config') {
                 const { name, language } = message.config || {};
 
@@ -703,9 +686,7 @@ Also bad: "On dit 'magasin' pour 'store', et 'nourriture' pour 'food'. Aussi, c'
     });
 });
 
-// =============================================================================
 // GRACEFUL SHUTDOWN - Clean exit for PM2 and manual termination
-// =============================================================================
 const shutdown = (signal: string) => {
     console.log(`[RELAY] ${signal} received - shutting down gracefully...`);
 
