@@ -64,7 +64,7 @@ import { useCameraStabilityWithReset } from './hooks/useCameraStability';
 // CONFIG — tweak these when switching between local dev and production
 // ============================================================================
 // Flip this to true when you want to hit the relay on your own machine
-const USE_LOCAL_RELAY = false;
+const USE_LOCAL_RELAY = true;
 const RELAY_PRODUCTION_URL = process.env.EXPO_PUBLIC_RELAY_URL ?? 'ws://localhost:8082';
 const RELAY_PORT = 8082;
 // If you've got a physical Android plugged in via USB, `adb reverse` lets
@@ -101,10 +101,7 @@ const CALIBRATION_SAMPLES = 25;           // ~1s of silence to figure out the ro
 const VISION_COOLDOWN_MS = 8000; // wait at least 8s between captures
 const CROSSHAIR_SIZE = 280; // matches the orb size in ActiveOrb
 
-// ============================================================================
-// DEBUG — flip to false before shipping
-// ============================================================================
-const DEBUG_MODE = true;
+const DEBUG_MODE = false;
 
 
 const debugLog = (tag: string, message: string, data?: any) => {
