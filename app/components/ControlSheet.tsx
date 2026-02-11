@@ -1,4 +1,3 @@
-import React from 'react';
 import { View, StyleSheet } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { BookOpen, Mic, MicOff, Camera, PhoneOff, VideoOff, AudioWaveform, Video } from 'lucide-react-native';

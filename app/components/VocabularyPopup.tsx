@@ -1,4 +1,3 @@
-import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { BlurView } from 'expo-blur';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
@@ -11,11 +10,11 @@ interface VocabularyPopupProps {
     onClose: () => void;
 }
 
-export const VocabularyPopup: React.FC<VocabularyPopupProps> = ({
+export const VocabularyPopup = ({
     words,
     isVisible,
     onClose,
-}) => {
+}: VocabularyPopupProps) => {
     if (!isVisible) return null;
 
     return (
@@ -24,14 +23,12 @@ export const VocabularyPopup: React.FC<VocabularyPopupProps> = ({
             exiting={FadeOut.duration(100)}
             style={styles.container}
         >
-            {/* Tap-outside backdrop */}
             <TouchableOpacity
                 style={StyleSheet.absoluteFill}
                 activeOpacity={1}
                 onPress={onClose}
             />
 
-            {/* Card */}
             <View style={styles.card}>
                 <BlurView
                     intensity={90}

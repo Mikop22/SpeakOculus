@@ -29,112 +29,87 @@ import Animated, {
   Easing,
   runOnJS,
   useAnimatedReaction,
-  SharedValue,
 } from 'react-native-reanimated';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AudioContext, AudioBufferSourceNode } from 'react-native-audio-api';
-import * as Haptics from 'expo-haptics';
 import * as ImageManipulator from 'expo-image-manipulator';
 
-// UI pieces
 import { ActiveOrb, OrbMode } from './components/ActiveOrb';
 import { StatusPill } from './components/StatusPill';
 import { ControlSheet } from './components/ControlSheet';
 import { Viewfinder, CameraFacing, ViewfinderRef } from './components/Viewfinder';
-import { CallHistoryScreen, AgentConfig, CallHistoryItem, generateSystemPrompt } from './components/CallHistoryScreen';
+import { CallHistoryScreen, AgentConfig, CallHistoryItem } from './components/CallHistoryScreen';
 import { GapWordsScreen } from './components/GapWordsScreen';
 import { VocabularyPopup } from './components/VocabularyPopup';
-import { THEME } from './theme';
-
-// Persistence layer
-import { loadAgents, addAgent, loadCallHistory, saveCallHistory, addGapWord, GapWord } from './storage';
-
-// Quick and dirty UUID — good enough for our use case
-const generateUUID = (): string => {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-};
-
 import { useCameraStabilityWithReset } from './hooks/useCameraStability';
 
-// ============================================================================
-// CONFIG — tweak these when switching between local dev and production
-// ============================================================================
-// Flip this to true when you want to hit the relay on your own machine
+import { addAgent, loadCallHistory, saveCallHistory, addGapWord, GapWord } from './storage';
+
+// ── Configuration ──
+
 const USE_LOCAL_RELAY = true;
 const RELAY_PRODUCTION_URL = process.env.EXPO_PUBLIC_RELAY_URL ?? 'ws://localhost:8082';
 const RELAY_PORT = 8082;
-// If you've got a physical Android plugged in via USB, `adb reverse` lets
-// us hit localhost as if it were the host machine. Pretty handy.
-const USE_ADB_REVERSE = true; // assumes: adb reverse tcp:8082 tcp:8082
-// iOS Sim / physical device without adb reverse → put your machine's LAN IP here.
-// Android Emulator falls back to 10.0.2.2 when this is 'localhost'.
+const USE_ADB_REVERSE = true; // Assumes `adb reverse tcp:8082 tcp:8082`
 const LOCAL_RELAY_IP = 'localhost';
 
 const RELAY_SERVER_URL = (() => {
   if (!USE_LOCAL_RELAY) return RELAY_PRODUCTION_URL;
   if (Platform.OS === 'android') {
-    // Physical device + adb reverse: localhost on the phone tunnels to the host
     if (USE_ADB_REVERSE) return `ws://127.0.0.1:${RELAY_PORT}`;
-    // Emulator quirk: 10.0.2.2 is how it reaches the host's loopback
+    // Android emulator maps 10.0.2.2 to the host loopback
     const host = LOCAL_RELAY_IP === 'localhost' ? '10.0.2.2' : LOCAL_RELAY_IP;
     return `ws://${host}:${RELAY_PORT}`;
   }
   return `ws://${LOCAL_RELAY_IP}:${RELAY_PORT}`;
 })();
 
-const SAMPLE_RATE = 24000; // OpenAI wants exactly 24kHz — no negotiating this one
+const SAMPLE_RATE = 24000; // OpenAI Realtime API requires 24 kHz PCM
 
-// ============================================================================
-// BARGE-IN — how we detect the user talking over the AI
-// ============================================================================
-// Since hardware AEC strips out the speaker echo, whatever RMS we see on the
-// mic is actually the user's voice. We just need a few frames in a row above
-// the noise floor to be confident it's real speech, not a bump or a cough.
-const BARGE_IN_CONSECUTIVE_FRAMES = 3;   // 3 frames in a row (~120ms) = "yep, they're talking"
-const CALIBRATION_SAMPLES = 25;           // ~1s of silence to figure out the room's noise floor
+// Barge-in: consecutive frames above the noise floor to confirm real speech
+const BARGE_IN_CONSECUTIVE_FRAMES = 3; // ~120 ms at 40 ms per frame
+const CALIBRATION_SAMPLES = 25;        // ~1 s of silence for noise floor
 
-// Vision — don't spam OpenAI with images
-const VISION_COOLDOWN_MS = 8000; // wait at least 8s between captures
-const CROSSHAIR_SIZE = 280; // matches the orb size in ActiveOrb
+const VISION_COOLDOWN_MS = 8000;
+const CROSSHAIR_SIZE = 280; // Must match the orb diameter in ActiveOrb
 
 const DEBUG_MODE = false;
+const BYPASS_BACKEND = false; // UI-only testing without a relay server
 
-
-const debugLog = (tag: string, message: string, data?: any) => {
+function debugLog(tag: string, message: string, data?: any): void {
   if (!DEBUG_MODE) return;
   const timestamp = new Date().toISOString().substr(11, 12);
   if (data !== undefined) {
-    console.log(`[${timestamp}] 🔍 ${tag}: ${message}`, data);
+    console.log(`[${timestamp}] ${tag}: ${message}`, data);
   } else {
-    console.log(`[${timestamp}] 🔍 ${tag}: ${message}`);
+    console.log(`[${timestamp}] ${tag}: ${message}`);
   }
-};
+}
 
-// Mic config — audioSource 7 is Android's VOICE_COMMUNICATION mode,
-// which flips on the hardware echo canceller. That's the secret sauce
-// for barge-in without hearing the AI echo back into the mic.
+function generateUUID(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+// audioSource 7 = VOICE_COMMUNICATION mode (Android), enabling hardware AEC.
+// Critical for barge-in: prevents AI playback from echoing back into the mic.
 const AUDIO_RECORD_OPTIONS = {
   sampleRate: 24000,
   channels: 1,
   bitsPerSample: 16,
   audioSource: 7,
   wavFile: 'speak_vision.wav',
-  bufferSize: 1920, // 40ms worth of samples at 24kHz
+  bufferSize: 1920, // 40 ms at 24 kHz
 };
 
-// ============================================================================
-// THE MAIN EVENT
-// ============================================================================
+// ── Main Screen ──
+
 const MainScreen = () => {
   const insets = useSafeAreaInsets();
 
-  // -------------------------------------------------------------------------
-  // All the state that makes this thing tick
-  // -------------------------------------------------------------------------
   const [connectionStatus, setConnectionStatus] = useState<string>('Offline');
   const [isConnected, setIsConnected] = useState(false);
   const [agentName, setAgentName] = useState('Assistant');
@@ -142,124 +117,125 @@ const MainScreen = () => {
   const interactionModeRef = useRef<OrbMode>('idle');
   const [permissionGranted, setPermissionGranted] = useState(false);
 
-  // Who we're talking to and what happened before
   const [currentAgentConfig, setCurrentAgentConfig] = useState<AgentConfig | null>(null);
   const [callHistory, setCallHistory] = useState<CallHistoryItem[]>([]);
-
-  // Gap words detail screen — which agent's words are we looking at?
   const [selectedAgentForGapWords, setSelectedAgentForGapWords] = useState<AgentConfig | null>(null);
 
-  // Words the user missed during this call (shown in a floating popup)
   const [sessionGapWords, setSessionGapWords] = useState<GapWord[]>([]);
   const [showVocabPopup, setShowVocabPopup] = useState(false);
 
-  // Basic UI toggles
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOn, setIsCameraOn] = useState(true);
-const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
+  const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
   const [isNoiseIsolationOn, setIsNoiseIsolationOn] = useState(true);
 
-  // Camera capture state
   const [visionEnabled, setVisionEnabled] = useState(true);
   const [isCapturing, setIsCapturing] = useState(false);
 
-  // Live subtitles — what the AI is currently saying
   const [aiTranscript, setAiTranscript] = useState('');
   const [displaySubtitle, setDisplaySubtitle] = useState('');
 
-  // Refs so our WebSocket/audio callbacks always see fresh values
-  // (React state inside closures goes stale — classic gotcha)
+  // Refs mirror state for use inside non-re-rendering closures (audio callbacks)
   const isMutedRef = useRef(false);
   const currentAgentConfigRef = useRef<AgentConfig | null>(null);
-
-  // When did this session start? Used for call duration in history
   const sessionStartTimeRef = useRef<number | null>(null);
 
-  // -------------------------------------------------------------------------
-  // Refs — things we need to poke at imperatively
-  // -------------------------------------------------------------------------
   const wsRef = useRef<WebSocket | null>(null);
   const audioRecordInitializedRef = useRef(false);
   const viewfinderRef = useRef<ViewfinderRef>(null);
 
-  // Latency bookkeeping — helps us measure how snappy the round-trip feels
   const lastSpeechStoppedTimeRef = useRef<number | null>(null);
   const lastFirstAudioReceivedTimeRef = useRef<number | null>(null);
 
-  // Vision capture guards — prevents overlapping captures and rate-limits them
   const lastCaptureTimeRef = useRef<number>(0);
   const captureInProgressRef = useRef(false);
-  const visionSendInProgressRef = useRef(false);
 
-  // -------------------------------------------------------------------------
-  // Audio playback — Web Audio API handles gapless scheduling of PCM chunks
-  // -------------------------------------------------------------------------
+  // Web Audio API for gapless PCM scheduling
   const audioContextRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef<number>(0);
   const pendingSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const isPlayingRef = useRef(false);
 
-  // -------------------------------------------------------------------------
-  // Barge-in — lets the user interrupt the AI mid-sentence
-  // -------------------------------------------------------------------------
-  // We need to know which response item is playing so we can tell OpenAI
-  // "hey, the user only heard up to X milliseconds of that"
   const lastResponseItemIdRef = useRef<string | null>(null);
-  const responseStartTimeRef = useRef<number>(0); // when playback kicked off (AudioContext time)
-
-  // How many audio frames in a row have been above the noise floor
+  const responseStartTimeRef = useRef<number>(0);
   const consecutiveAboveRef = useRef<number>(0);
   const bargeInRmsHistoryRef = useRef<number[]>([]);
 
-  // We measure the room's ambient noise before the AI starts talking.
-  // That gives us a baseline so we don't confuse AC hum with speech.
+  // Ambient noise calibration (baseline for barge-in thresholds)
   const ambientFloorRef = useRef<number>(0);
   const calibrationSamplesRef = useRef<number[]>([]);
   const isAmbientCalibratedRef = useRef<boolean>(false);
 
-  // Subtitle queue — we break the AI transcript into sentences and show
-  // them one at a time with timed transitions, like real subtitles
+  // Subtitle queue (sentences shown one at a time with timed transitions)
   const aiTranscriptRef = useRef('');
-  const subtitleQueueRef = useRef<{text: string, duration: number}[]>([]);
+  const subtitleQueueRef = useRef<{text: string; duration: number}[]>([]);
   const subtitleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevBreakIdxRef = useRef(0);
   const isTimedDisplayRef = useRef(false);
 
-  // -------------------------------------------------------------------------
-  // Shared values — these live on the UI thread, no re-renders needed
-  // -------------------------------------------------------------------------
   const volumeLevel = useSharedValue(0);
 
-  // Keep refs in sync with state so callbacks always have fresh values
-  useEffect(() => {
-    isMutedRef.current = isMuted;
-  }, [isMuted]);
+  // Sync refs so non-re-rendering callbacks read fresh values
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  useEffect(() => { interactionModeRef.current = interactionMode; }, [interactionMode]);
+  useEffect(() => { aiTranscriptRef.current = aiTranscript; }, [aiTranscript]);
 
-  // Same deal for interaction mode
-  useEffect(() => {
-    interactionModeRef.current = interactionMode;
-  }, [interactionMode]);
+  // ── Helpers ──
 
-  // ...and the transcript, so our timed subtitle callbacks see the latest text
-  useEffect(() => {
-    aiTranscriptRef.current = aiTranscript;
-  }, [aiTranscript]);
+  /** Animate the volume orb. Dampened mode (30%) is used when muted or calibrating. */
+  function animateVolume(rms: number, dampened = false): void {
+    volumeLevel.value = withTiming(dampened ? rms * 0.3 : rms, {
+      duration: 40,
+      easing: Easing.out(Easing.quad),
+    });
+  }
 
-  // -------------------------------------------------------------------------
-  // Stability detection — auto-captures when the phone is held steady
-  // -------------------------------------------------------------------------
+  /** Reset all subtitle and transcript state between responses. */
+  function resetSubtitleState(): void {
+    setAiTranscript('');
+    setDisplaySubtitle('');
+    subtitleQueueRef.current = [];
+    prevBreakIdxRef.current = 0;
+    isTimedDisplayRef.current = false;
+    if (subtitleTimerRef.current) {
+      clearTimeout(subtitleTimerRef.current);
+      subtitleTimerRef.current = null;
+    }
+  }
+
+  /** Returns how many ms of audio actually played before an interrupt (for truncation). */
+  function calculatePlayedAudioMs(): number {
+    if (!audioContextRef.current || responseStartTimeRef.current <= 0) return 0;
+    const elapsed = audioContextRef.current.currentTime - responseStartTimeRef.current;
+    return Math.max(0, Math.floor(elapsed * 1000));
+  }
+
+  /** Notify OpenAI how much audio the user actually heard before a barge-in. */
+  function sendTruncationEvent(audioEndMs: number, logPrefix: string): void {
+    if (!lastResponseItemIdRef.current || audioEndMs <= 0) return;
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+
+    wsRef.current.send(JSON.stringify({
+      type: 'conversation.item.truncate',
+      item_id: lastResponseItemIdRef.current,
+      content_index: 0,
+      audio_end_ms: audioEndMs,
+    }));
+    console.log(`[${logPrefix}] Sent truncate: item_id=${lastResponseItemIdRef.current}, audio_end_ms=${audioEndMs}`);
+  }
+
+  // ── Stability detection (auto-captures when the device is held steady) ──
+
   const {
     isStableSV,
     stabilityProgress,
-    varianceSV,
     resetStability,
   } = useCameraStabilityWithReset({
     enabled: visionEnabled && isConnected && isCameraOn && !isCapturing,
   });
 
-  // -------------------------------------------------------------------------
-  // RMS volume — how loud is the mic input right now?
-  // -------------------------------------------------------------------------
+  // ── RMS calculation ──
+
   const calculateRMS = useCallback((base64Data: string): number => {
     try {
       const buffer = Buffer.from(base64Data, 'base64');
@@ -278,53 +254,24 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     }
   }, []);
 
-  // -------------------------------------------------------------------------
-  // Vision capture — snap a photo and ship it to OpenAI via the relay
-  // -------------------------------------------------------------------------
+  // ── Vision capture ──
+
   const captureAndSendFrame = useCallback(async () => {
-    // Don't stack captures on top of each other
-    if (captureInProgressRef.current) {
-      debugLog('VISION', 'Capture already in progress, skipping');
-      return;
-    }
+    if (captureInProgressRef.current) return;
 
-    // Respect the cooldown between captures
     const now = Date.now();
-    const timeSinceLastCapture = now - lastCaptureTimeRef.current;
-    if (timeSinceLastCapture < VISION_COOLDOWN_MS) {
-      debugLog('VISION', `Cooldown active (${Math.round((VISION_COOLDOWN_MS - timeSinceLastCapture) / 1000)}s remaining)`);
-      return;
-    }
-
-    // Don't capture while the AI is mid-sentence — feels rude
-    if (isPlayingRef.current) {
-      debugLog('VISION', 'AI is speaking, skipping capture');
-      return;
-    }
-
-    // Make sure the camera is actually available
-    if (!viewfinderRef.current) {
-      debugLog('VISION', 'Camera ref not available');
-      return;
-    }
-
-    // No point capturing if we can't send it anywhere
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      debugLog('VISION', 'WebSocket not connected');
-      return;
-    }
+    if (now - lastCaptureTimeRef.current < VISION_COOLDOWN_MS) return;
+    if (isPlayingRef.current) return;
+    if (!viewfinderRef.current) return;
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     try {
       captureInProgressRef.current = true;
       setIsCapturing(true);
-
-      // Let the user know we're working on it
       setInteractionMode('processing');
 
-      // Snap the photo — no shutter sound so it doesn't interrupt the convo
-      debugLog('VISION', 'Capturing frame...');
       const photo = await viewfinderRef.current.takePictureAsync({
-        quality: 0.7, // a bit higher since we'll be cropping it down
+        quality: 0.7,
         base64: true,
         skipProcessing: true,
         shutterSound: false,
@@ -338,45 +285,35 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
 
       debugLog('VISION', `Photo captured: ${photo.width}x${photo.height}`);
 
-      // Crop down to just what's inside the viewfinder box
+      // Map the on-screen crosshair rectangle to photo-pixel crop coordinates
       const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
-
-      // Figure out where the crosshair sits on screen (it's always dead center)
       const crosshairScreenX = (screenWidth - CROSSHAIR_SIZE) / 2;
       const crosshairScreenY = (screenHeight - CROSSHAIR_SIZE) / 2;
 
-      // The photo and the screen have different aspect ratios, so we need
-      // to translate screen pixels into photo pixels carefully
       const photoAspect = photo.width / photo.height;
       const screenAspect = screenWidth / screenHeight;
 
       let scaleX: number, scaleY: number, offsetX = 0, offsetY = 0;
 
       if (photoAspect > screenAspect) {
-        // Photo is wider — letterboxed on the sides
         scaleY = photo.height / screenHeight;
         scaleX = scaleY;
         offsetX = (photo.width - screenWidth * scaleX) / 2;
       } else {
-        // Photo is taller — letterboxed on top/bottom
         scaleX = photo.width / screenWidth;
         scaleY = scaleX;
         offsetY = (photo.height - screenHeight * scaleY) / 2;
       }
 
-      // Now we know where to cut
       const cropX = Math.max(0, Math.round(offsetX + crosshairScreenX * scaleX));
       const cropY = Math.max(0, Math.round(offsetY + crosshairScreenY * scaleY));
       const cropSize = Math.round(CROSSHAIR_SIZE * scaleX);
 
-      // Clamp so we don't go out of bounds
+      // Clamp to image bounds
       const finalCropX = Math.min(cropX, photo.width - cropSize);
       const finalCropY = Math.min(cropY, photo.height - cropSize);
       const finalCropSize = Math.min(cropSize, photo.width - finalCropX, photo.height - finalCropY);
 
-      debugLog('VISION', `Cropping to: x=${finalCropX}, y=${finalCropY}, size=${finalCropSize}`);
-
-      // Crop to the crosshair region and shrink to 384x384 for OpenAI
       const croppedImage = await ImageManipulator.manipulateAsync(
         photo.uri,
         [
@@ -388,9 +325,7 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
               height: finalCropSize,
             },
           },
-          {
-            resize: { width: 384, height: 384 },
-          },
+          { resize: { width: 384, height: 384 } },
         ],
         { base64: true, compress: 0.5, format: ImageManipulator.SaveFormat.JPEG }
       );
@@ -401,26 +336,14 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
         return;
       }
 
-      debugLog('VISION', `Cropped image: 384x384, base64 length: ${croppedImage.base64.length}`);
-
-      // Fire it off to the relay server
-      const payload = {
+      wsRef.current.send(JSON.stringify({
         type: 'vision.direct_injection',
         image: croppedImage.base64,
         timestamp: now,
-      };
-
-      visionSendInProgressRef.current = true;
-      const visionTimeout = setTimeout(() => { visionSendInProgressRef.current = false; }, 200);
-      wsRef.current.send(JSON.stringify(payload));
-      visionSendInProgressRef.current = false;
-      clearTimeout(visionTimeout);
+      }));
       debugLog('VISION', 'Frame sent to server');
 
-      // Start the cooldown timer
       lastCaptureTimeRef.current = now;
-
-      // Reset so we don't immediately fire again
       resetStability();
 
     } catch (error) {
@@ -432,10 +355,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     }
   }, [resetStability]);
 
-  // -------------------------------------------------------------------------
-  // When the phone goes from shaky to steady, snap a pic automatically.
-  // This runs entirely on the UI thread — no React re-renders involved.
-  // -------------------------------------------------------------------------
   useAnimatedReaction(
     () => isStableSV.value,
     (currentlyStable, previouslyStable) => {
@@ -445,16 +364,13 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     }
   );
 
-  // -------------------------------------------------------------------------
-  // Audio streaming — decode base64 PCM chunks and schedule them gaplessly
-  // -------------------------------------------------------------------------
+  // ── Audio playback ──
+
   const initAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
       console.log('[AUDIO] Initializing AudioContext');
-      audioContextRef.current = new AudioContext({
-        sampleRate: SAMPLE_RATE,
-      });
-      nextStartTimeRef.current = 0; // Reset time pointer
+      audioContextRef.current = new AudioContext({ sampleRate: SAMPLE_RATE });
+      nextStartTimeRef.current = 0;
     } else if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume();
     }
@@ -464,14 +380,12 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     if (!audioContextRef.current) initAudioContext();
     const ctx = audioContextRef.current!;
 
-    // Wake it up if it went to sleep
     if (ctx.state === 'suspended') {
       console.log('[AUDIO] Context suspended. Resuming...');
       await ctx.resume();
     }
 
     try {
-      // Decode the base64 into raw PCM16 bytes
       const rawBuffer = Buffer.from(base64Delta, 'base64');
       const int16Array = new Int16Array(
         rawBuffer.buffer,
@@ -479,51 +393,40 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
         rawBuffer.length / 2
       );
 
-      // Web Audio wants float32 in the -1..1 range
       const float32Array = new Float32Array(int16Array.length);
       for (let i = 0; i < int16Array.length; i++) {
         float32Array[i] = int16Array[i] / 32768.0;
       }
 
-      // Wrap it in an AudioBuffer
       const audioBuffer = ctx.createBuffer(1, float32Array.length, SAMPLE_RATE);
       audioBuffer.copyToChannel(float32Array, 0);
 
-      // Hook it up to the speakers
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(ctx.destination);
 
-      // Schedule it right after the last chunk ends. If we fell behind
-      // (buffer underrun), just start playing immediately.
+      // Schedule after last chunk; catch up on buffer underrun
       const startTime = Math.max(ctx.currentTime, nextStartTimeRef.current);
       source.start(startTime);
 
-      // Mark as playing for barge-in detection
       if (!isPlayingRef.current) {
         isPlayingRef.current = true;
         console.log(`[AUDIO] Playback starting - ctx.state: ${ctx.state}, sampleRate: ${ctx.sampleRate}, currentTime: ${ctx.currentTime.toFixed(2)}s, samples: ${float32Array.length}, startTime: ${startTime.toFixed(2)}s, duration: ${audioBuffer.duration.toFixed(3)}s`);
       }
 
-      // Log First Audio Playback Latency (optional tracking)
       if (lastFirstAudioReceivedTimeRef.current) {
         const now = Date.now();
         const processingLag = now - lastFirstAudioReceivedTimeRef.current;
         console.log(`[CLIENT] [LATENCY] Stream Started (Processing Lag: ${processingLag}ms)`);
-
         if (lastSpeechStoppedTimeRef.current) {
           console.log(`[CLIENT] [LATENCY] TOTAL E2E LATENCY: ${now - lastSpeechStoppedTimeRef.current}ms`);
         }
         lastFirstAudioReceivedTimeRef.current = null;
       }
 
-      // 6. Advance Time Pointer
       nextStartTimeRef.current = startTime + audioBuffer.duration;
-
-      // Keep track to stop if needed
       pendingSourcesRef.current.push(source);
 
-      // Cleanup when done (optional, but good for memory)
       const onEndedHandler = () => {
         if ((source as any)._hasEnded) return;
         (source as any)._hasEnded = true;
@@ -531,7 +434,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
         const index = pendingSourcesRef.current.indexOf(source);
         if (index > -1) pendingSourcesRef.current.splice(index, 1);
 
-        // If queue empty, we are idle
         if (pendingSourcesRef.current.length === 0) {
           debugLog('MODE', 'Mode: -> idle (playback complete)');
           setInteractionMode('idle');
@@ -549,53 +451,43 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
 
   const stopAudioPlayback = useCallback(() => {
     console.log('[AUDIO] Stopping playback...');
-
-    // Stop all active sources
     pendingSourcesRef.current.forEach(source => {
       try { source.stop(); } catch { }
     });
     pendingSourcesRef.current = [];
-
-    // Reset Context Time
     nextStartTimeRef.current = 0;
     isPlayingRef.current = false;
-
-    // Reset barge-in tracking
     consecutiveAboveRef.current = 0;
     bargeInRmsHistoryRef.current = [];
   }, []);
 
-  // -------------------------------------------------------------------------
-  // PERMISSION REQUEST
-  // -------------------------------------------------------------------------
+  // ── Microphone permission ──
+
   const requestMicrophonePermission = useCallback(async (): Promise<boolean> => {
     try {
-      if (Platform.OS === 'android') {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-          {
-            title: 'Microphone Permission',
-            message: 'Speak Vision needs microphone access.',
-            buttonPositive: 'OK',
-            buttonNegative: 'Cancel',
-          }
-        );
-        return granted === PermissionsAndroid.RESULTS.GRANTED;
-      } else {
-        // iOS: Permission is requested automatically by react-native-audio-record
-        // when recording starts. Return true to proceed.
+      if (Platform.OS !== 'android') {
+        // iOS: permission is requested automatically by react-native-audio-record
         console.log('[CLIENT] iOS: Mic permission handled by native module');
         return true;
       }
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        {
+          title: 'Microphone Permission',
+          message: 'Speak Vision needs microphone access.',
+          buttonPositive: 'OK',
+          buttonNegative: 'Cancel',
+        }
+      );
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
     } catch (error) {
       console.error('[CLIENT] Permission error:', error);
       return false;
     }
   }, []);
 
-  // -------------------------------------------------------------------------
-  // AUDIO RECORD INITIALIZATION
-  // -------------------------------------------------------------------------
+  // ── Audio recording ──
+
   const initAudioRecord = useCallback((): boolean => {
     if (audioRecordInitializedRef.current) return true;
 
@@ -617,37 +509,17 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
         return;
       }
 
-      // Calculate RMS for visualization
       const rms = calculateRMS(base64Data);
 
-      // Early return if muted (use ref to avoid stale closure)
       if (isMutedRef.current) {
-        // Still update visualization when muted (shows user they're speaking but muted)
-        volumeLevel.value = withTiming(rms * 0.3, {
-          duration: 40,
-          easing: Easing.out(Easing.quad),
-        });
+        animateVolume(rms, true);
         return;
       }
 
-      // Vision pause: throttle audio during vision frame upload to prevent stutter
-      if (visionSendInProgressRef.current) {
-        volumeLevel.value = withTiming(rms * 0.3, {
-          duration: 40,
-          easing: Easing.out(Easing.quad),
-        });
-        return;
-      }
-
-      // =========================================================================
-      // AMBIENT CALIBRATION
-      // Collect RMS samples before AI speaks to establish background noise floor.
-      // The AI always speaks first, so we have a natural calibration window
-      // between mic start and first response.audio.delta.
-      // =========================================================================
+      // The AI speaks first, giving us a natural window of silence to
+      // measure the ambient noise floor before barge-in detection begins.
       if (!isAmbientCalibratedRef.current) {
         if (!isPlayingRef.current) {
-          // Still quiet - collect ambient sample
           calibrationSamplesRef.current.push(rms);
           if (calibrationSamplesRef.current.length >= CALIBRATION_SAMPLES) {
             const sum = calibrationSamplesRef.current.reduce((a, b) => a + b, 0);
@@ -656,34 +528,26 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
             console.log(`[CALIBRATION] Ambient floor: ${ambientFloorRef.current.toFixed(4)} RMS (${CALIBRATION_SAMPLES} samples)`);
             calibrationSamplesRef.current = [];
           }
-          volumeLevel.value = withTiming(rms * 0.3, { duration: 40, easing: Easing.out(Easing.quad) });
+          animateVolume(rms, true);
           return;
         }
-        // AI started speaking before calibration finished - force-complete
+        // AI started speaking before calibration finished -- force-complete
         const samples = calibrationSamplesRef.current;
         if (samples.length >= 3) {
-          const sum = samples.reduce((a, b) => a + b, 0);
-          ambientFloorRef.current = sum / samples.length;
+          ambientFloorRef.current = samples.reduce((a, b) => a + b, 0) / samples.length;
         } else {
-          ambientFloorRef.current = 0.01; // Conservative default
+          ambientFloorRef.current = 0.01;
         }
         isAmbientCalibratedRef.current = true;
         console.log(`[CALIBRATION] Ambient floor (force): ${ambientFloorRef.current.toFixed(4)} RMS (${samples.length} samples)`);
         calibrationSamplesRef.current = [];
-        // Fall through to playback gate
+        // Fall through to barge-in / normal send
       }
 
-      // =========================================================================
-      // BARGE-IN DURING PLAYBACK (Hardware AEC active via VOICE_COMMUNICATION)
-      //
-      // With audioSource 7, the OS cancels speaker echo before we see it.
-      // Echo RMS is ~0.0000 during playback, so cleaned RMS reflects real speech.
-      // We send all audio to OpenAI and let both barge-in paths work:
-      //   1. Client-side (optimistic): RMS spike → stop playback immediately
-      //   2. Server-side (OpenAI VAD): cleaned audio → server detects speech
-      // =========================================================================
+      // Hardware AEC (audioSource 7) strips speaker echo, so RMS here
+      // reflects real user speech. Both client-side (optimistic) and
+      // server-side (OpenAI VAD) barge-in paths run simultaneously.
       if (isPlayingRef.current) {
-        // Barge-in detection on the AEC-cleaned signal
         const threshold = Math.max(ambientFloorRef.current * 3, 0.02);
         if (rms > threshold) {
           consecutiveAboveRef.current++;
@@ -693,23 +557,8 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
             consecutiveAboveRef.current = 0;
             bargeInRmsHistoryRef.current = [];
 
-            // Calculate how much audio played before interrupt (for truncation)
-            let audioEndMs = 0;
-            if (audioContextRef.current && responseStartTimeRef.current > 0) {
-              const elapsedSeconds = audioContextRef.current.currentTime - responseStartTimeRef.current;
-              audioEndMs = Math.max(0, Math.floor(elapsedSeconds * 1000));
-            }
-
-            // Send truncation event
-            if (lastResponseItemIdRef.current && audioEndMs > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({
-                type: 'conversation.item.truncate',
-                item_id: lastResponseItemIdRef.current,
-                content_index: 0,
-                audio_end_ms: audioEndMs,
-              }));
-              console.log(`[BARGE-IN] Sent truncate: item_id=${lastResponseItemIdRef.current}, audio_end_ms=${audioEndMs}`);
-            }
+            const audioEndMs = calculatePlayedAudioMs();
+            sendTruncationEvent(audioEndMs, 'BARGE-IN');
 
             stopAudioPlayback();
             setInteractionMode('listening');
@@ -721,8 +570,8 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
           bargeInRmsHistoryRef.current = [];
         }
 
-        // Always update visualization and send cleaned audio to OpenAI
-        volumeLevel.value = withTiming(rms, { duration: 40, easing: Easing.out(Easing.quad) });
+        // Send cleaned audio to OpenAI even during playback (for server-side VAD)
+        animateVolume(rms, false);
         wsRef.current.send(JSON.stringify({
           type: 'input_audio_buffer.append',
           audio: base64Data,
@@ -730,13 +579,7 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
         return;
       }
 
-      // Update volume visualization with timing matched to 40ms audio chunk cadence
-      volumeLevel.value = withTiming(rms, {
-        duration: 40,
-        easing: Easing.out(Easing.quad),
-      });
-
-      // Send audio to relay server
+      animateVolume(rms, false);
       wsRef.current.send(JSON.stringify({
         type: 'input_audio_buffer.append',
         audio: base64Data,
@@ -747,20 +590,14 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     return true;
   }, [calculateRMS, volumeLevel]);
 
-  // -------------------------------------------------------------------------
-  // RECORDING CONTROLS
-  // -------------------------------------------------------------------------
   const startRecording = useCallback(async () => {
     if (!permissionGranted) return;
     const ready = initAudioRecord();
     if (!ready) return;
 
-    // Ensure playback is stopped before listening
     stopAudioPlayback();
-
     AudioRecord.start();
     console.log('[MIC] AudioRecord.start() called - microphone active');
-    debugLog('MODE', 'Mode: -> listening (recording started)');
     setInteractionMode('listening');
   }, [permissionGranted, initAudioRecord, stopAudioPlayback]);
 
@@ -770,15 +607,14 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     console.log('[CLIENT] Recording stopped');
   }, [volumeLevel]);
 
-  // -------------------------------------------------------------------------
-  // WEBSOCKET MESSAGE HANDLER
-  // -------------------------------------------------------------------------
+  // ── WebSocket message handler ──
+
   const handleMessage = useCallback((event: MessageEvent) => {
     try {
       const data = JSON.parse(event.data);
       const eventType = data.type || 'unknown';
 
-      // Log ALL events for debugging (throttle audio.delta)
+      // Sample 5% of high-frequency audio deltas for logging
       if (eventType === 'response.audio.delta') {
         if (Math.random() < 0.05) {
           console.log(`[RESPONSE] audio.delta received, delta length: ${data.delta?.length ?? 0}`);
@@ -793,7 +629,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
           initAudioContext();
           setConnectionStatus('AI Connected');
           setIsConnected(true);
-          // Start recording audio immediately upon connection
           startRecording();
           break;
 
@@ -802,27 +637,17 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
           break;
 
         case 'response.created':
-          // Clear transcript at the very start of a new response,
-          // before any audio or transcript deltas arrive.
-          setAiTranscript('');
-          setDisplaySubtitle('');
-          subtitleQueueRef.current = [];
-          prevBreakIdxRef.current = 0;
-          isTimedDisplayRef.current = false;
-          if (subtitleTimerRef.current) { clearTimeout(subtitleTimerRef.current); subtitleTimerRef.current = null; }
+          resetSubtitleState();
           break;
 
-        case 'response.function_call_arguments.done':
-          // Tool call from the LLM (e.g. log_gap_word in Friend Mode)
+        case 'response.function_call_arguments.done': {
           const toolName = data.name ?? 'unknown';
           let toolArgs: Record<string, string> = {};
           try {
             if (typeof data.arguments === 'string') toolArgs = JSON.parse(data.arguments);
-          } catch { /* ignore */ }
+          } catch { /* ignore malformed args */ }
           console.log('[CLIENT] TOOL CALL:', toolName, toolArgs);
 
-          // Handle log_gap_word tool - save the gap word to storage
-          // Read from ref to avoid stale closure in useCallback
           const agentConfig = currentAgentConfigRef.current;
           if (toolName === 'log_gap_word' && agentConfig) {
             const gapWord: GapWord = {
@@ -835,9 +660,9 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
             console.log('[CLIENT] Gap word saved:', gapWord);
           }
           break;
+        }
 
         case 'response.audio.delta':
-          // Track item_id for truncation on interrupt
           if (data.item_id) {
             lastResponseItemIdRef.current = data.item_id;
           }
@@ -846,14 +671,13 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
             debugLog('MODE', 'Mode: -> speaking (streaming started)');
             setInteractionMode('speaking');
 
-            // Track when this response started playing (for truncation calculation)
             if (audioContextRef.current) {
               responseStartTimeRef.current = audioContextRef.current.currentTime;
               debugLog('BARGE-IN', `Response started at AudioContext time: ${responseStartTimeRef.current.toFixed(3)}s`);
             }
           }
 
-          // Latency Log: First Byte
+          // First-byte latency: time from user speech end to first audio delta
           if (lastSpeechStoppedTimeRef.current && !lastFirstAudioReceivedTimeRef.current) {
             lastFirstAudioReceivedTimeRef.current = Date.now();
             const latency = lastFirstAudioReceivedTimeRef.current - lastSpeechStoppedTimeRef.current;
@@ -871,53 +695,28 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
           }
           break;
 
-        case 'input_audio_buffer.speech_started':
+        case 'input_audio_buffer.speech_started': {
           console.log('[CLIENT] INTERRUPT - User speaking (server VAD)');
-          debugLog('MODE', 'INTERRUPT! Mode: -> listening');
 
-          // Calculate how much audio actually played before interrupt (for truncation)
-          let audioEndMs = 0;
-          if (audioContextRef.current && responseStartTimeRef.current > 0) {
-            const elapsedSeconds = audioContextRef.current.currentTime - responseStartTimeRef.current;
-            audioEndMs = Math.max(0, Math.floor(elapsedSeconds * 1000));
-            debugLog('BARGE-IN', `Audio played before interrupt: ${audioEndMs}ms`);
-          }
-
-          // Send truncation event to keep conversation history coherent
-          // This tells OpenAI exactly how much of its response the user heard
-          if (lastResponseItemIdRef.current && audioEndMs > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
-            const truncateEvent = {
-              type: 'conversation.item.truncate',
-              item_id: lastResponseItemIdRef.current,
-              content_index: 0,
-              audio_end_ms: audioEndMs,
-            };
-            wsRef.current.send(JSON.stringify(truncateEvent));
-            console.log(`[CLIENT] Sent truncate event: item_id=${lastResponseItemIdRef.current}, audio_end_ms=${audioEndMs}`);
-          }
+          const audioEndMs = calculatePlayedAudioMs();
+          debugLog('BARGE-IN', `Audio played before interrupt: ${audioEndMs}ms`);
+          sendTruncationEvent(audioEndMs, 'CLIENT');
 
           stopAudioPlayback();
           setInteractionMode('listening');
-          setAiTranscript('');
-          setDisplaySubtitle('');
-          subtitleQueueRef.current = [];
-          prevBreakIdxRef.current = 0;
-          isTimedDisplayRef.current = false;
-          if (subtitleTimerRef.current) { clearTimeout(subtitleTimerRef.current); subtitleTimerRef.current = null; }
+          resetSubtitleState();
 
-          // Reset tracking refs
           lastResponseItemIdRef.current = null;
           responseStartTimeRef.current = 0;
           break;
+        }
 
         case 'input_audio_buffer.speech_stopped':
-          debugLog('MODE', 'Mode: -> processing');
           lastSpeechStoppedTimeRef.current = Date.now();
           lastFirstAudioReceivedTimeRef.current = null;
           setInteractionMode('processing');
           break;
 
-        // Barge-in confirmation events
         case 'response.cancelled':
           console.log('[CLIENT] Response cancelled (barge-in successful)');
           break;
@@ -926,7 +725,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
           debugLog('BARGE-IN', 'Truncation confirmed by OpenAI');
           break;
 
-        // Vision acknowledgment from server (optional)
         case 'vision.received':
           debugLog('VISION', 'Server acknowledged vision frame');
           break;
@@ -936,42 +734,26 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     }
   }, [scheduleAudioChunk, stopAudioPlayback, initAudioContext, startRecording]);
 
-  // -------------------------------------------------------------------------
-  // WEBSOCKET CONNECTION
-  // -------------------------------------------------------------------------
-  const BYPASS_BACKEND = false; // Set to true for UI testing without AWS backend
+  // ── WebSocket connection ──
 
   const connect = useCallback((config: AgentConfig) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    // Validate config
-    if (!config || !config.name || !config.language) {
+    if (!config?.name || !config?.language) {
       console.error('[CLIENT] Invalid agent config:', config);
       return;
     }
 
-    // Store the agent config and update display name
-    try {
-      setCurrentAgentConfig(config);
-      currentAgentConfigRef.current = config;
-      setAgentName(config.name);
-      sessionStartTimeRef.current = Date.now();
-      debugLog('CONNECTION', `Connecting to ${config.name} (${config.language})...`);
-      setConnectionStatus('Connecting...');
+    setCurrentAgentConfig(config);
+    currentAgentConfigRef.current = config;
+    setAgentName(config.name);
+    sessionStartTimeRef.current = Date.now();
+    setConnectionStatus('Connecting...');
 
-      // Clear any leftover state from a previous call
-      setAiTranscript('');
-      setSessionGapWords([]);
-      setShowVocabPopup(false);
-      setDisplaySubtitle('');
-      subtitleQueueRef.current = [];
-      prevBreakIdxRef.current = 0;
-      isTimedDisplayRef.current = false;
-      if (subtitleTimerRef.current) { clearTimeout(subtitleTimerRef.current); subtitleTimerRef.current = null; }
-    } catch (e) {
-      console.error('[CLIENT] Error setting up connection state:', e);
-      return;
-    }
+    // Clear leftover state from any previous session
+    resetSubtitleState();
+    setSessionGapWords([]);
+    setShowVocabPopup(false);
 
     if (BYPASS_BACKEND) {
       console.log('[CLIENT] BYPASS_BACKEND active. Simulating connection...');
@@ -979,7 +761,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
         setConnectionStatus('AI Connected');
         setIsConnected(true);
         setInteractionMode('listening');
-        debugLog('CONNECTION', 'Connected (Simulated)');
       }, 1500);
       return;
     }
@@ -989,20 +770,14 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
       const ws = new WebSocket(RELAY_SERVER_URL);
       wsRef.current = ws;
 
-      // Track if we successfully connected (to distinguish close events)
       let didConnect = false;
 
       ws.onopen = () => {
         didConnect = true;
         console.log('[CLIENT] Connected');
-        debugLog('CONNECTION', 'Connected');
 
-        // =====================================================================
-        // HARDWARE AEC ACTIVATION
-        // Start InCallManager to activate iOS voiceChat mode / Android voice
-        // call routing. This enables hardware echo cancellation which is
-        // critical for barge-in to work without feedback loops.
-        // =====================================================================
+        // InCallManager routes audio through the voice call path,
+        // enabling hardware AEC which is critical for barge-in.
         try {
           InCallManager.start({ media: 'audio' });
           InCallManager.setSpeakerphoneOn(true);
@@ -1011,21 +786,19 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
           console.warn('[AEC] Failed to start InCallManager:', e);
         }
 
-        // Reset ambient calibration for new session
+        // Reset ambient calibration for the new session
         isAmbientCalibratedRef.current = false;
         calibrationSamplesRef.current = [];
         ambientFloorRef.current = 0;
 
-        // PHASE 3.1: Send agent.config
-        // The server will handle generating the Friend Mode system prompt
-        const agentConfigMessage = {
+        // Tell the relay server which agent/language to configure
+        ws.send(JSON.stringify({
           type: 'agent.config',
           config: {
             name: config.name,
             language: config.language,
           },
-        };
-        ws.send(JSON.stringify(agentConfigMessage));
+        }));
         debugLog('SESSION', `Sent agent.config for ${config.name}: ${config.language} tutor`);
       };
 
@@ -1033,21 +806,16 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
 
       ws.onerror = (e) => {
         console.error('[CLIENT] WebSocket error:', e);
-        // Don't reset UI here - let onclose handle it
       };
 
       ws.onclose = (event) => {
         console.log('[CLIENT] Disconnected, code:', event.code, 'reason:', event.reason);
-        debugLog('CONNECTION', 'Disconnected');
 
-        // Only reset UI if we were previously connected or after a delay
         if (didConnect) {
-          // Normal disconnect - reset immediately
           setConnectionStatus('Offline');
           setIsConnected(false);
           setInteractionMode('idle');
         } else {
-          // Connection failed - show error briefly before resetting
           setConnectionStatus('Connection Failed');
           setTimeout(() => {
             setConnectionStatus('Offline');
@@ -1071,7 +839,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
   }, [handleMessage, stopRecording, stopAudioPlayback]);
 
   const disconnect = useCallback(() => {
-    // Save to history before disconnecting
     if (currentAgentConfig && sessionStartTimeRef.current) {
       const duration = Math.floor((Date.now() - sessionStartTimeRef.current) / 1000);
       const historyItem: CallHistoryItem = {
@@ -1082,11 +849,9 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
       };
       setCallHistory(prev => {
         const updated = [historyItem, ...prev];
-        // Persist to AsyncStorage
         saveCallHistory(updated);
         return updated;
       });
-      // Also save the agent to persistent storage
       addAgent(currentAgentConfig);
       debugLog('HISTORY', `Saved session: ${currentAgentConfig.name} (${duration}s)`);
     }
@@ -1094,7 +859,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     stopRecording();
     stopAudioPlayback();
 
-    // Stop hardware AEC
     try {
       InCallManager.stop();
       console.log('[AEC] InCallManager stopped');
@@ -1102,7 +866,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
       console.warn('[AEC] Failed to stop InCallManager:', e);
     }
 
-    // Reset agent config
     setCurrentAgentConfig(null);
     currentAgentConfigRef.current = null;
     sessionStartTimeRef.current = null;
@@ -1122,9 +885,8 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     setIsConnected(false);
   }, [stopRecording, stopAudioPlayback, currentAgentConfig]);
 
-  // -------------------------------------------------------------------------
-  // UI CONTROL HANDLERS
-  // -------------------------------------------------------------------------
+  // ── UI control handlers ──
+
   const handleToggleMute = useCallback(() => {
     setIsMuted(prev => !prev);
   }, []);
@@ -1141,7 +903,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     setIsNoiseIsolationOn(prev => !prev);
   }, []);
 
-  // Delete a call history item
   const handleDeleteItem = useCallback((itemId: string) => {
     setCallHistory(prev => {
       const updated = prev.filter(item => item.id !== itemId);
@@ -1150,45 +911,42 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     });
   }, []);
 
-  // -------------------------------------------------------------------------
-  // LIFECYCLE
-  // -------------------------------------------------------------------------
+  // ── Lifecycle ──
+
   useEffect(() => {
     const init = async () => {
       const granted = await requestMicrophonePermission();
       setPermissionGranted(granted);
 
-      // Load persisted data from AsyncStorage
       const storedHistory = await loadCallHistory();
 
-      // If no history exists, load placeholder data for preview
       if (storedHistory.length === 0) {
+        // Seed demo data so first-time users see a populated UI
         const placeholderHistory: CallHistoryItem[] = [
           {
             id: 'demo-1',
-            agentConfig: { name: 'María', language: 'Spanish', systemPrompt: '' },
-            timestamp: new Date(Date.now() - 1000 * 60 * 30), // 30 min ago
+            agentConfig: { name: 'Mar\u00eda', language: 'Spanish', systemPrompt: '' },
+            timestamp: new Date(Date.now() - 1000 * 60 * 30),
             duration: 245,
           },
           {
             id: 'demo-2',
             agentConfig: { name: 'Pierre', language: 'French', systemPrompt: '' },
-            timestamp: new Date(Date.now() - 1000 * 60 * 60 * 3), // 3 hours ago
+            timestamp: new Date(Date.now() - 1000 * 60 * 60 * 3),
             duration: 180,
           },
           {
             id: 'demo-3',
             agentConfig: { name: 'Yuki', language: 'Japanese', systemPrompt: '' },
-            timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24), // yesterday
+            timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24),
             duration: 420,
           },
         ];
         setCallHistory(placeholderHistory);
 
-        // Also add some placeholder gap words for María
         const { saveAllGapWords } = await import('./storage');
         await saveAllGapWords({
-          'María': [
+          'Mar\u00eda': [
             { native_word: 'to run', target_word: 'correr', timestamp: Date.now() - 1000 * 60 * 25 },
             { native_word: 'window', target_word: 'ventana', timestamp: Date.now() - 1000 * 60 * 20 },
             { native_word: 'to understand', target_word: 'entender', timestamp: Date.now() - 1000 * 60 * 15 },
@@ -1214,41 +972,21 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     };
   }, [requestMicrophonePermission, stopRecording, stopAudioPlayback]);
 
-
-  // -------------------------------------------------------------------------
-  // AUTO-CONNECT FOR DEMO (Optional)
-  // -------------------------------------------------------------------------
-  useEffect(() => {
-    // connect(); // Uncomment to auto-connect on load
-  }, [connect]);
-
-
   const showCallUI = isConnected || connectionStatus === 'Connecting...' || connectionStatus === 'Connection Failed';
 
-  // -------------------------------------------------------------------------
-  // ANIMATION STATE & STYLES (Optimized for 120Hz iOS + Android)
-  // -------------------------------------------------------------------------
-  const animState = useSharedValue(0); // 0 = Disconnected (Sheet visible), 1 = Connected (UI visible)
+  // ── Transition animations ──
+
+  const animState = useSharedValue(0); // 0 = history visible, 1 = call UI visible
   const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
   useEffect(() => {
     if (showCallUI) {
-      // Spring in: UI arrives with momentum (physical, satisfying)
-      animState.value = withSpring(1, {
-        damping: 20,
-        stiffness: 180,
-        mass: 0.8,
-      });
+      animState.value = withSpring(1, { damping: 20, stiffness: 180, mass: 0.8 });
     } else {
-      // Timing out: decisive dismissal (no bounce on exit)
-      animState.value = withTiming(0, {
-        duration: 350,
-        easing: Easing.in(Easing.cubic),
-      });
+      animState.value = withTiming(0, { duration: 350, easing: Easing.in(Easing.cubic) });
     }
   }, [showCallUI]);
 
-  // Call history: iOS slides down, Android fades + scales
   const sheetStyle = useAnimatedStyle(() => {
     'worklet';
     if (Platform.OS === 'android') {
@@ -1267,7 +1005,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     };
   });
 
-  // Call UI fades in
   const uiLayerStyle = useAnimatedStyle(() => {
     'worklet';
     return {
@@ -1275,11 +1012,8 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
     };
   });
 
+  // ── Timed subtitle queue ──
 
-  // -------------------------------------------------------------------------
-  // TIMED SUBTITLE QUEUE
-  // -------------------------------------------------------------------------
-  // Advance to the next queued sentence, or fall back to the streaming tail.
   const advanceSubtitle = useCallback(() => {
     subtitleTimerRef.current = null;
     if (subtitleQueueRef.current.length > 0) {
@@ -1289,25 +1023,22 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
       subtitleTimerRef.current = setTimeout(advanceSubtitle, next.duration);
     } else {
       isTimedDisplayRef.current = false;
-      // Show current streaming tail (in-progress sentence)
       const tail = aiTranscriptRef.current.slice(prevBreakIdxRef.current).trim();
       setDisplaySubtitle(tail);
     }
   }, []);
 
-  // Detect sentence boundaries and enqueue timed subtitles.
   useEffect(() => {
-    if (!aiTranscript) return; // resets handled by event handlers directly
+    if (!aiTranscript) return;
 
-    // Scan for new sentence boundaries
-    const breakPoints = /[.!?。！？]\s/g;
+    const breakPoints = /[.!?\u3002\uFF01\uFF1F]\s/g;
     let m;
     while ((m = breakPoints.exec(aiTranscript)) !== null) {
       const breakEnd = m.index + m[0].length;
       if (breakEnd > prevBreakIdxRef.current) {
         const sentence = aiTranscript.slice(prevBreakIdxRef.current, m.index + 1).trim();
         if (sentence) {
-          // ~60ms per char, floor 1.2s, cap 4s
+          // ~60ms per char, clamped to 1.2s--4s
           const duration = Math.min(4000, Math.max(1200, sentence.length * 60));
           subtitleQueueRef.current.push({ text: sentence, duration });
         }
@@ -1315,7 +1046,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
       }
     }
 
-    // If nothing timed is on screen, either start the queue or show streaming tail
     if (!isTimedDisplayRef.current) {
       if (subtitleQueueRef.current.length > 0) {
         const next = subtitleQueueRef.current.shift()!;
@@ -1323,33 +1053,28 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
         isTimedDisplayRef.current = true;
         subtitleTimerRef.current = setTimeout(advanceSubtitle, next.duration);
       } else {
-        // Live-stream the current in-progress sentence
         const tail = aiTranscript.slice(prevBreakIdxRef.current).trim();
         if (tail) setDisplaySubtitle(tail);
       }
     }
   }, [aiTranscript, advanceSubtitle]);
 
-  // Cleanup timer on unmount
   useEffect(() => {
     return () => { if (subtitleTimerRef.current) clearTimeout(subtitleTimerRef.current); };
   }, []);
 
-  // -------------------------------------------------------------------------
-  // RENDER
-  // -------------------------------------------------------------------------
+  // ── Render ──
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
 
-      {/* LAYER 1: Viewfinder Background (Always active but obscured by Sheet initially) */}
       <Viewfinder
         ref={viewfinderRef}
         isCameraOn={isCameraOn}
         facing={cameraFacing}
       />
 
-      {/* LAYER 2: Main Call UI (Fade In / Slide Up) */}
       <Animated.View
         style={[
           styles.uiLayer,
@@ -1358,13 +1083,11 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
         ]}
         pointerEvents={showCallUI ? 'auto' : 'none'}
       >
-        {/* Top Status */}
         <StatusPill
           status={isConnected ? `Connected to ${agentName}` : connectionStatus}
           isConnected={isConnected}
         />
 
-        {/* Center Orb */}
         <View style={styles.orbContainer}>
           <ActiveOrb
             mode={interactionMode}
@@ -1374,7 +1097,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
           />
         </View>
 
-        {/* AI Transcript (between orb and controls) */}
         {displaySubtitle.length > 0 && (
           <View style={styles.transcriptContainer}>
             <View style={styles.transcriptBubble}>
@@ -1385,14 +1107,12 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
           </View>
         )}
 
-        {/* Vocabulary Popup (floats above controls) */}
         <VocabularyPopup
           words={sessionGapWords}
           isVisible={showVocabPopup}
           onClose={() => setShowVocabPopup(false)}
         />
 
-        {/* Bottom Controls */}
         <ControlSheet
           onDisconnect={disconnect}
           isMuted={isMuted}
@@ -1406,7 +1126,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
         />
       </Animated.View>
 
-      {/* LAYER 3: Call History / Start Screen (Slides Down) */}
       <Animated.View style={[StyleSheet.absoluteFill, sheetStyle]}>
         <CallHistoryScreen
           onConnect={connect}
@@ -1416,7 +1135,6 @@ const [cameraFacing, setCameraFacing] = useState<CameraFacing>('back');
         />
       </Animated.View>
 
-      {/* LAYER 4: Gap Words Screen (slides in from right) */}
       {selectedAgentForGapWords && (
         <GapWordsScreen
           agent={selectedAgentForGapWords}
@@ -1435,7 +1153,6 @@ export default function App() {
     Inter_700Bold,
   });
 
-  // Show loading indicator while fonts load (Android only needs this)
   if (!fontsLoaded && Platform.OS === 'android') {
     return (
       <View style={styles.loadingContainer}>

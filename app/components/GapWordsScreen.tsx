@@ -15,28 +15,24 @@ import Animated, {
     withTiming,
     withSpring,
     Easing,
-    runOnJS,
 } from 'react-native-reanimated';
 import { ChevronLeft, BookOpen, Trash2 } from 'lucide-react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { THEME } from '../theme';
 import { AgentConfig } from './CallHistoryScreen';
 import { GapWord, getGapWordsForAgent, removeGapWord } from '../storage';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
-// ============================================================================
-// HELPERS
-// ============================================================================
-const getInitials = (name: string): string => {
+function getInitials(name: string): string {
     return name
         .split(' ')
         .map(word => word.charAt(0).toUpperCase())
         .slice(0, 2)
         .join('');
-};
+}
 
-const getAvatarColor = (language: string): string => {
+function getAvatarColor(language: string): string {
     const colors: Record<string, string> = {
         spanish: '#FF6B6B',
         french: '#4ECDC4',
@@ -50,9 +46,9 @@ const getAvatarColor = (language: string): string => {
         arabic: '#FDCB6E',
     };
     return colors[language.toLowerCase()] || '#9DA0A5';
-};
+}
 
-const formatDate = (timestamp: number): string => {
+function formatDate(timestamp: number): string {
     const date = new Date(timestamp);
     return date.toLocaleDateString('en-US', {
         month: 'short',
@@ -60,19 +56,13 @@ const formatDate = (timestamp: number): string => {
         hour: 'numeric',
         minute: '2-digit',
     });
-};
+}
 
-// ============================================================================
-// TYPES
-// ============================================================================
 interface GapWordsScreenProps {
     agent: AgentConfig;
     onBack: () => void;
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
 export const GapWordsScreen: React.FC<GapWordsScreenProps> = ({
     agent,
     onBack,
@@ -81,11 +71,9 @@ export const GapWordsScreen: React.FC<GapWordsScreenProps> = ({
     const [gapWords, setGapWords] = useState<GapWord[]>([]);
     const [loading, setLoading] = useState(true);
 
-    // Slide animation: 0 = visible (on-screen), 1 = off-screen right
     const slide = useSharedValue(1);
 
     useEffect(() => {
-        // Spring in: screen arrives with elastic momentum (iOS-native feel)
         slide.value = withSpring(0, {
             damping: 22,
             stiffness: 250,
@@ -112,7 +100,6 @@ export const GapWordsScreen: React.FC<GapWordsScreenProps> = ({
             duration: 250,
             easing: Easing.in(Easing.cubic),
         });
-        // Delay unmount until animation finishes
         setTimeout(onBack, 250);
     }, [onBack]);
 
@@ -123,7 +110,6 @@ export const GapWordsScreen: React.FC<GapWordsScreenProps> = ({
 
     return (
         <Animated.View style={[styles.container, slideStyle]}>
-            {/* Background */}
             {Platform.OS !== 'android' ? (
                 <BlurView intensity={THEME.blur.intensity} tint={THEME.blur.tint} style={StyleSheet.absoluteFill} />
             ) : (
@@ -137,7 +123,6 @@ export const GapWordsScreen: React.FC<GapWordsScreenProps> = ({
                 ]}
                 showsVerticalScrollIndicator={false}
             >
-                {/* Header with Back Button */}
                 <View style={styles.header}>
                     <TouchableOpacity
                         style={styles.backButton}
@@ -149,7 +134,6 @@ export const GapWordsScreen: React.FC<GapWordsScreenProps> = ({
                     </TouchableOpacity>
                 </View>
 
-                {/* Agent Card */}
                 <View style={styles.agentCard}>
                     <View style={[styles.avatar, { backgroundColor: getAvatarColor(agent.language) }]}>
                         <Text style={styles.avatarText}>{getInitials(agent.name)}</Text>
@@ -158,15 +142,15 @@ export const GapWordsScreen: React.FC<GapWordsScreenProps> = ({
                     <Text style={styles.agentLanguage}>{agent.language} Tutor</Text>
                 </View>
 
-                {/* Section Title */}
                 <Text style={styles.sectionTitle}>Missed Words</Text>
 
-                {/* Gap Words List */}
-                {loading ? (
+                {loading && (
                     <View style={styles.emptyState}>
                         <Text style={styles.emptyStateText}>Loading...</Text>
                     </View>
-                ) : gapWords.length === 0 ? (
+                )}
+
+                {!loading && gapWords.length === 0 && (
                     <View style={styles.emptyState}>
                         <BookOpen size={48} color={THEME.colors.textSecondary} style={{ marginBottom: 16 }} />
                         <Text style={styles.emptyStateTitle}>No Missed Words Yet</Text>
@@ -174,7 +158,9 @@ export const GapWordsScreen: React.FC<GapWordsScreenProps> = ({
                             Words you miss during conversations with {agent.name} will appear here.
                         </Text>
                     </View>
-                ) : (
+                )}
+
+                {!loading && gapWords.length > 0 && (
                     <View style={styles.wordList}>
                         {gapWords.map((word, index) => (
                             <View key={`${word.native_word}-${word.timestamp}`}>
@@ -190,7 +176,7 @@ export const GapWordsScreen: React.FC<GapWordsScreenProps> = ({
                                             style={styles.deleteButton}
                                             activeOpacity={0.6}
                                         >
-                                            <Trash2 size={18} color={'#FF453A'} />
+                                            <Trash2 size={18} color="#FF453A" />
                                         </TouchableOpacity>
                                     </View>
                                 </View>
@@ -204,9 +190,6 @@ export const GapWordsScreen: React.FC<GapWordsScreenProps> = ({
     );
 };
 
-// ============================================================================
-// STYLES
-// ============================================================================
 const styles = StyleSheet.create({
     container: {
         ...StyleSheet.absoluteFillObject,

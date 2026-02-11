@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { View, StyleSheet, Text, Platform, TouchableOpacity } from 'react-native';
 import { CameraView, useCameraPermissions, CameraCapturedPicture } from 'expo-camera';
 
@@ -24,22 +24,16 @@ export const Viewfinder = forwardRef<ViewfinderRef, ViewfinderProps>(
     const [permission, requestPermission] = useCameraPermissions();
     const cameraRef = useRef<CameraView>(null);
 
-    // Expose camera methods to parent via ref
     useImperativeHandle(ref, () => ({
       takePictureAsync: async (options = {}) => {
-        if (!cameraRef.current) {
-          console.warn('[Viewfinder] Camera ref not available');
-          return undefined;
-        }
+        if (!cameraRef.current) return undefined;
         try {
-          const photo = await cameraRef.current.takePictureAsync({
+          return await cameraRef.current.takePictureAsync({
             quality: options.quality ?? 0.4,
             base64: options.base64 ?? true,
             skipProcessing: options.skipProcessing ?? true,
-            shutterSound: options.shutterSound ?? false, // Silent by default
+            shutterSound: options.shutterSound ?? false,
           });
-          console.log('[Viewfinder] Photo captured, size:', photo?.width, 'x', photo?.height);
-          return photo;
         } catch (error) {
           console.error('[Viewfinder] Failed to take picture:', error);
           return undefined;
@@ -48,35 +42,27 @@ export const Viewfinder = forwardRef<ViewfinderRef, ViewfinderProps>(
     }), []);
 
     useEffect(() => {
-      if (permission) {
-        console.log('[Viewfinder] Camera Permission:', permission.status, permission.granted);
-        // Auto-request permission if not yet determined
-        if (!permission.granted && permission.canAskAgain) {
-          console.log('[Viewfinder] Auto-requesting camera permission...');
-          requestPermission();
-        }
-        if (permission.granted) {
-          onPermissionGranted?.();
-        }
+      if (!permission) return;
+      if (!permission.granted && permission.canAskAgain) {
+        requestPermission();
+      }
+      if (permission.granted) {
+        onPermissionGranted?.();
       }
     }, [permission]);
 
     const handleRequestPermission = async () => {
-      console.log('[Viewfinder] Requesting permission...');
       const result = await requestPermission();
-      console.log('[Viewfinder] Request result:', result);
       if (result.granted) {
         onPermissionGranted?.();
       }
     };
 
     if (!permission) {
-      // Permission loading
       return <View style={styles.container} />;
     }
 
-    // On Web, we bypass this check and let the CameraView try to load,
-    // which often triggers the permission prompt better than the hook logic.
+    // On web, CameraView triggers the browser permission prompt directly
     if (Platform.OS !== 'web' && !permission.granted) {
       return (
         <View style={[styles.container, styles.cameraOff]}>
@@ -91,13 +77,10 @@ export const Viewfinder = forwardRef<ViewfinderRef, ViewfinderProps>(
     if (!isCameraOn) {
       return (
         <View style={[styles.container, styles.cameraOff]}>
-          <View style={styles.placeholder} />
           <Text style={styles.statusText}>Camera Off</Text>
         </View>
       );
     }
-
-    console.log('[Viewfinder] Rendering camera, facing:', facing, 'permission:', permission?.granted);
 
     return (
       <View style={styles.container}>
@@ -113,7 +96,6 @@ export const Viewfinder = forwardRef<ViewfinderRef, ViewfinderProps>(
   }
 );
 
-// Display name for debugging
 Viewfinder.displayName = 'Viewfinder';
 
 const styles = StyleSheet.create({
@@ -147,7 +129,4 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 20,
   },
-  placeholder: {
-    // Empty
-  }
 });

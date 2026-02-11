@@ -12,9 +12,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { THEME } from '../theme';
 import { NewAgentSheet } from './NewAgentSheet';
 
-// ============================================================================
-// TYPES
-// ============================================================================
 export interface AgentConfig {
     name: string;
     language: string;
@@ -25,7 +22,7 @@ export interface CallHistoryItem {
     id: string;
     agentConfig: AgentConfig;
     timestamp: Date;
-    duration?: number; // in seconds
+    duration?: number; // seconds
 }
 
 interface CallHistoryScreenProps {
@@ -35,33 +32,39 @@ interface CallHistoryScreenProps {
     history?: CallHistoryItem[];
 }
 
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-const formatTime = (date: Date): string => {
+function formatTime(date: Date): string {
     return date.toLocaleTimeString('en-US', {
         hour: 'numeric',
         minute: '2-digit',
         hour12: true,
     });
-};
+}
 
-const formatDuration = (seconds?: number): string => {
-    if (!seconds) return '';
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-};
-
-const getInitials = (name: string): string => {
+function getInitials(name: string): string {
     return name
         .split(' ')
         .map(word => word.charAt(0).toUpperCase())
         .slice(0, 2)
         .join('');
-};
+}
 
-const groupHistoryByDate = (history: CallHistoryItem[]): Map<string, CallHistoryItem[]> => {
+function getAvatarColor(language: string): string {
+    const colors: Record<string, string> = {
+        spanish: '#FF6B6B',
+        french: '#4ECDC4',
+        german: '#FFE66D',
+        italian: '#95E1D3',
+        portuguese: '#FF9F43',
+        japanese: '#EE6B9E',
+        chinese: '#C44569',
+        korean: '#6C5CE7',
+        russian: '#00B894',
+        arabic: '#FDCB6E',
+    };
+    return colors[language.toLowerCase()] || '#9DA0A5';
+}
+
+function groupHistoryByDate(history: CallHistoryItem[]): Map<string, CallHistoryItem[]> {
     const grouped = new Map<string, CallHistoryItem[]>();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -93,18 +96,12 @@ const groupHistoryByDate = (history: CallHistoryItem[]): Map<string, CallHistory
     });
 
     return grouped;
-};
+}
 
-// ============================================================================
-// GENERATE SYSTEM PROMPT
-// ============================================================================
-export const generateSystemPrompt = (name: string, language: string): string => {
+export function generateSystemPrompt(name: string, language: string): string {
     return `You are ${name}, a helpful ${language} tutor. Speak in ${language} and correct my mistakes gently. Be encouraging, patient, and adapt to my skill level. Start conversations naturally and help me practice real-world scenarios.`;
-};
+}
 
-// ============================================================================
-// CALL ROW COMPONENT
-// ============================================================================
 interface CallRowProps {
     item: CallHistoryItem;
     isEditMode: boolean;
@@ -136,10 +133,6 @@ const CallRow: React.FC<CallRowProps> = ({
         overflow: 'hidden' as const,
     }));
 
-    const handleDelete = () => {
-        onDelete(item.id);
-    };
-
     return (
         <View>
             <TouchableOpacity
@@ -147,17 +140,15 @@ const CallRow: React.FC<CallRowProps> = ({
                 onPress={() => !isEditMode && onRedial(item)}
                 activeOpacity={0.7}
             >
-                {/* Delete button - always mounted, animated in/out */}
                 <Animated.View style={deleteStyle} pointerEvents={isEditMode ? 'auto' : 'none'}>
                     <TouchableOpacity
-                        onPress={handleDelete}
+                        onPress={() => onDelete(item.id)}
                         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     >
                         <MinusCircle size={22} color="#FFF" fill={THEME.colors.destructive} />
                     </TouchableOpacity>
                 </Animated.View>
 
-                {/* Avatar */}
                 <View style={styles.avatarContainer}>
                     <View style={[styles.avatarPlaceholder, { backgroundColor: avatarColor }]}>
                         <Text style={styles.avatarInitials}>
@@ -166,7 +157,6 @@ const CallRow: React.FC<CallRowProps> = ({
                     </View>
                 </View>
 
-                {/* Details */}
                 <View style={styles.callDetails}>
                     <Text style={styles.callerName}>{item.agentConfig.name}</Text>
                     <View style={styles.callTypeContainer}>
@@ -177,14 +167,11 @@ const CallRow: React.FC<CallRowProps> = ({
                     </View>
                 </View>
 
-                {/* Meta */}
                 <View style={styles.callMeta}>
                     <Text style={styles.timeText}>{formatTime(item.timestamp)}</Text>
                     <TouchableOpacity
                         style={styles.infoButton}
-                        onPress={() => {
-                            onViewGapWords(item.agentConfig);
-                        }}
+                        onPress={() => onViewGapWords(item.agentConfig)}
                         activeOpacity={0.7}
                     >
                         <Info size={18} color={THEME.colors.textSecondary} />
@@ -192,15 +179,11 @@ const CallRow: React.FC<CallRowProps> = ({
                 </View>
             </TouchableOpacity>
 
-            {/* Thin separator line (skip last item) */}
             {!isLast && <View style={styles.separator} />}
         </View>
     );
 };
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
 export const CallHistoryScreen: React.FC<CallHistoryScreenProps> = ({
     onConnect,
     onViewGapWords,
@@ -211,7 +194,6 @@ export const CallHistoryScreen: React.FC<CallHistoryScreenProps> = ({
     const [isNewAgentSheetVisible, setIsNewAgentSheetVisible] = useState(false);
     const [isEditMode, setIsEditMode] = useState(false);
 
-    // Handle creating a new agent and starting a session
     const handleStartSession = useCallback((config: { name: string; language: string }) => {
         const agentConfig: AgentConfig = {
             name: config.name,
@@ -223,37 +205,14 @@ export const CallHistoryScreen: React.FC<CallHistoryScreenProps> = ({
         onConnect(agentConfig);
     }, [onConnect]);
 
-    // Handle redialing a previous agent
     const handleRedial = useCallback((item: CallHistoryItem) => {
         onConnect(item.agentConfig);
     }, [onConnect]);
 
-    // Handle viewing gap words for an agent
-    const handleViewGapWords = useCallback((agent: AgentConfig) => {
-        onViewGapWords(agent);
-    }, [onViewGapWords]);
-
-    // Open new agent sheet
-    const handleNewAgentPress = useCallback(() => {
-        setIsNewAgentSheetVisible(true);
-    }, []);
-
-    // Toggle edit mode
-    const handleToggleEditMode = useCallback(() => {
-        setIsEditMode(prev => !prev);
-    }, []);
-
-    // Delete a call history item
-    const handleDelete = useCallback((itemId: string) => {
-        onDeleteItem(itemId);
-    }, [onDeleteItem]);
-
-    // Group history items by date
     const groupedHistory = groupHistoryByDate(history);
 
     return (
         <View style={styles.container}>
-            {/* Blurred camera background (like FaceTime) */}
             {Platform.OS !== 'android' ? (
                 <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
             ) : (
@@ -267,19 +226,16 @@ export const CallHistoryScreen: React.FC<CallHistoryScreenProps> = ({
                 ]}
                 showsVerticalScrollIndicator={false}
             >
-                {/* Header */}
                 <View style={styles.header}>
-                    <TouchableOpacity onPress={handleToggleEditMode} activeOpacity={0.7}>
+                    <TouchableOpacity onPress={() => setIsEditMode(prev => !prev)} activeOpacity={0.7}>
                         <Text style={[styles.editText, isEditMode && styles.editTextActive]}>
                             {isEditMode ? 'Done' : 'Edit'}
                         </Text>
                     </TouchableOpacity>
                 </View>
 
-                {/* Title */}
                 <Text style={styles.pageTitle}>FaceTime</Text>
 
-                {/* Action Buttons */}
                 <View style={styles.actionButtonsContainer}>
                     <TouchableOpacity style={styles.actionButtonLeft} activeOpacity={0.7}>
                         <Link color="#FFF" size={24} style={{ marginBottom: 8 }} />
@@ -288,7 +244,7 @@ export const CallHistoryScreen: React.FC<CallHistoryScreenProps> = ({
 
                     <TouchableOpacity
                         style={styles.actionButtonRight}
-                        onPress={handleNewAgentPress}
+                        onPress={() => setIsNewAgentSheetVisible(true)}
                         activeOpacity={0.7}
                     >
                         <Video color="#FFF" size={24} fill="#FFF" style={{ marginBottom: 8 }} />
@@ -296,33 +252,28 @@ export const CallHistoryScreen: React.FC<CallHistoryScreenProps> = ({
                     </TouchableOpacity>
                 </View>
 
-                {/* Call History List */}
                 {Array.from(groupedHistory.entries()).map(([dateKey, items]) => (
                     <View key={dateKey}>
-                        {/* Section Header */}
                         <View style={styles.sectionHeaderContainer}>
                             <Text style={styles.sectionHeader}>{dateKey}</Text>
                         </View>
 
-                        {/* History Items */}
                         {items.map((item, index) => (
                             <CallRow
                                 key={item.id}
                                 item={item}
                                 isEditMode={isEditMode}
                                 onRedial={handleRedial}
-                                onDelete={handleDelete}
-                                onViewGapWords={handleViewGapWords}
+                                onDelete={onDeleteItem}
+                                onViewGapWords={onViewGapWords}
                                 isLast={index === items.length - 1}
                             />
                         ))}
 
-                        {/* Bottom separator after group */}
                         <View style={styles.groupSeparator} />
                     </View>
                 ))}
 
-                {/* Empty State */}
                 {history.length === 0 && (
                     <View style={styles.emptyState}>
                         <Video size={48} color={THEME.colors.textSecondary} style={{ marginBottom: 16 }} />
@@ -334,7 +285,6 @@ export const CallHistoryScreen: React.FC<CallHistoryScreenProps> = ({
                 )}
             </ScrollView>
 
-            {/* New Agent Sheet */}
             <NewAgentSheet
                 isVisible={isNewAgentSheetVisible}
                 onClose={() => setIsNewAgentSheetVisible(false)}
@@ -344,28 +294,6 @@ export const CallHistoryScreen: React.FC<CallHistoryScreenProps> = ({
     );
 };
 
-// ============================================================================
-// AVATAR COLOR HELPER
-// ============================================================================
-const getAvatarColor = (language: string): string => {
-    const colors: Record<string, string> = {
-        spanish: '#FF6B6B',
-        french: '#4ECDC4',
-        german: '#FFE66D',
-        italian: '#95E1D3',
-        portuguese: '#FF9F43',
-        japanese: '#EE6B9E',
-        chinese: '#C44569',
-        korean: '#6C5CE7',
-        russian: '#00B894',
-        arabic: '#FDCB6E',
-    };
-    return colors[language.toLowerCase()] || '#9DA0A5';
-};
-
-// ============================================================================
-// STYLES
-// ============================================================================
 const styles = StyleSheet.create({
     container: {
         ...StyleSheet.absoluteFillObject,

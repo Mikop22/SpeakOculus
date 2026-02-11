@@ -1,20 +1,19 @@
 const { withMainActivity } = require('@expo/config-plugins');
 
 /**
- * Expo Config Plugin to enable 120Hz refresh rate on Android (Kotlin)
+ * Expo Config Plugin to enable 120Hz refresh rate on Android (Kotlin).
+ * Injects a setHighRefreshRate() method into MainActivity and calls it from onCreate.
  */
 const withHighRefreshRate = (config) => {
-  return withMainActivity(config, async (config) => {
-    const mainActivity = config.modResults;
+  return withMainActivity(config, async (modConfig) => {
+    const mainActivity = modConfig.modResults;
 
-    // Check if already modified
     if (mainActivity.contents.includes('setHighRefreshRate')) {
-      return config;
+      return modConfig;
     }
 
-    // Add required imports if not present
+    // Add required imports after the package declaration
     if (!mainActivity.contents.includes('import android.os.Build')) {
-      // Find the first import statement and add our import after the package line
       mainActivity.contents = mainActivity.contents.replace(
         /(package [^\n]+\n)/,
         '$1\nimport android.os.Build\n'
@@ -28,7 +27,6 @@ const withHighRefreshRate = (config) => {
       );
     }
 
-    // Add the high refresh rate function before the closing brace of the class
     const highRefreshMethod = `
     private fun setHighRefreshRate() {
         try {
@@ -55,27 +53,26 @@ const withHighRefreshRate = (config) => {
                 }
             }
         } catch (e: Exception) {
-            // Silently fail
+            // Silently fail on unsupported devices
         }
     }
 `;
 
-    // Call setHighRefreshRate() in onCreate after super.onCreate
-    // IMPORTANT: Must inject the call BEFORE adding the method body,
-    // otherwise the includes check sees "setHighRefreshRate()" in the method definition
+    // Inject the call in onCreate BEFORE adding the method body,
+    // so the idempotency check does not match the method definition
     mainActivity.contents = mainActivity.contents.replace(
       /(super\.onCreate\([^)]*\))/,
       '$1\n        setHighRefreshRate()'
     );
 
-    // Find the last closing brace and insert method before it
+    // Insert method before the final closing brace of the class
     const lastBraceIndex = mainActivity.contents.lastIndexOf('}');
     mainActivity.contents =
       mainActivity.contents.slice(0, lastBraceIndex) +
       highRefreshMethod + '\n' +
       mainActivity.contents.slice(lastBraceIndex);
 
-    return config;
+    return modConfig;
   });
 };
 

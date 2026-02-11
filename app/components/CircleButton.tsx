@@ -1,4 +1,3 @@
-import React, { useCallback } from 'react';
 import { TouchableOpacity, Text, StyleSheet, View } from 'react-native';
 import { LucideIcon } from 'lucide-react-native';
 import { THEME } from '../theme';
@@ -9,6 +8,11 @@ interface CircleButtonProps {
     onPress: () => void;
     variant?: 'default' | 'destructive';
     isActive?: boolean;
+}
+
+function getIconColor(isDestructive: boolean, isActive: boolean): string {
+    if (isActive && !isDestructive) return '#000000';
+    return '#FFFFFF';
 }
 
 export const CircleButton = ({ icon: Icon, label, onPress, variant = 'default', isActive = false }: CircleButtonProps) => {
@@ -27,7 +31,7 @@ export const CircleButton = ({ icon: Icon, label, onPress, variant = 'default', 
             >
                 <Icon
                     size={22}
-                    color={isDestructive ? '#FFFFFF' : isActive ? '#000000' : '#FFFFFF'}
+                    color={getIconColor(isDestructive, isActive)}
                     strokeWidth={2}
                 />
             </TouchableOpacity>

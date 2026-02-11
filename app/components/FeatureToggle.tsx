@@ -1,4 +1,3 @@
-import React from 'react';
 import { TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { LucideIcon } from 'lucide-react-native';
 import { THEME } from '../theme';

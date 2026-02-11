@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
     View,
     Text,
@@ -56,7 +56,6 @@ export const NewAgentSheet: React.FC<NewAgentSheetProps> = ({
     const [name, setName] = useState('');
     const [language, setLanguage] = useState('');
     const [mounted, setMounted] = useState(false);
-    const inputRef = useRef<TextInput>(null);
 
     const translateY = useSharedValue(SCREEN_HEIGHT);
     const backdropOpacity = useSharedValue(0);
@@ -70,7 +69,6 @@ export const NewAgentSheet: React.FC<NewAgentSheetProps> = ({
     const isFormValid = trimmedName.length > 0 && language.length > 0;
     const selectedLang = LANGUAGES.find(l => l.label === language);
 
-    // Mount/unmount with exit animation
     useEffect(() => {
         if (isVisible) {
             setName('');
@@ -91,7 +89,6 @@ export const NewAgentSheet: React.FC<NewAgentSheetProps> = ({
         }
     }, [isVisible]);
 
-    // Avatar pop in/out
     useEffect(() => {
         if (!mounted) return;
         avatarScale.value = showAvatar
@@ -99,7 +96,6 @@ export const NewAgentSheet: React.FC<NewAgentSheetProps> = ({
             : withTiming(0, { duration: 150 });
     }, [showAvatar, mounted]);
 
-    // Pills fade in/out
     useEffect(() => {
         if (!mounted) return;
         pillsOpacity.value = showPills
@@ -107,7 +103,6 @@ export const NewAgentSheet: React.FC<NewAgentSheetProps> = ({
             : withTiming(0, { duration: 150 });
     }, [showPills, mounted]);
 
-    // Pulse when form is complete
     useEffect(() => {
         if (isFormValid) {
             pulseScale.value = withRepeat(
@@ -162,7 +157,6 @@ export const NewAgentSheet: React.FC<NewAgentSheetProps> = ({
 
     return (
         <View style={styles.overlay}>
-            {/* Backdrop */}
             <Animated.View style={[styles.backdrop, backdropStyle]}>
                 <TouchableOpacity
                     style={StyleSheet.absoluteFill}
@@ -171,7 +165,6 @@ export const NewAgentSheet: React.FC<NewAgentSheetProps> = ({
                 />
             </Animated.View>
 
-            {/* Sheet */}
             <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                 style={styles.keyboardView}
@@ -182,7 +175,7 @@ export const NewAgentSheet: React.FC<NewAgentSheetProps> = ({
                         tint={THEME.blur.tint}
                         style={[styles.sheet, { paddingBottom: insets.bottom + 28 }]}
                     >
-                        {/* Avatar — becomes the call button when valid */}
+                        {/* Avatar doubles as the call button when form is valid */}
                         <Animated.View style={[styles.avatarWrapper, avatarAnimStyle]}>
                             <TouchableOpacity
                                 onPress={isFormValid ? handleStartSession : undefined}
@@ -203,7 +196,6 @@ export const NewAgentSheet: React.FC<NewAgentSheetProps> = ({
                             </TouchableOpacity>
                         </Animated.View>
 
-                        {/* "Tap to call" hint */}
                         {isFormValid && (
                             <Animated.Text
                                 entering={FadeIn.duration(200)}
@@ -214,9 +206,7 @@ export const NewAgentSheet: React.FC<NewAgentSheetProps> = ({
                             </Animated.Text>
                         )}
 
-                        {/* Name input — large, borderless, centered */}
                         <TextInput
-                            ref={inputRef}
                             style={styles.nameInput}
                             placeholder="Who should I be?"
                             placeholderTextColor={THEME.colors.textTertiary}
@@ -228,7 +218,6 @@ export const NewAgentSheet: React.FC<NewAgentSheetProps> = ({
                             selectionColor={THEME.colors.accent}
                         />
 
-                        {/* Language pills — flag only, appear after 2+ chars */}
                         <Animated.View style={[styles.pillsRow, pillsAnimStyle]}>
                             {LANGUAGES.map(lang => {
                                 const isSelected = language === lang.label;
@@ -282,8 +271,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         overflow: 'hidden',
     },
-
-    // Avatar
     avatarWrapper: {
         marginBottom: 8,
     },
@@ -310,16 +297,12 @@ const styles = StyleSheet.create({
         color: '#FFFFFF',
         letterSpacing: 0.5,
     },
-
-    // Call hint
     callHint: {
         ...THEME.typography.caption1,
         color: THEME.colors.textSecondary,
         marginTop: 4,
         marginBottom: 4,
     },
-
-    // Name input
     nameInput: {
         ...THEME.typography.title1,
         color: THEME.colors.textPrimary,
@@ -327,8 +310,6 @@ const styles = StyleSheet.create({
         paddingVertical: 16,
         paddingHorizontal: THEME.spacing.md,
     },
-
-    // Language pills
     pillsRow: {
         flexDirection: 'row',
         justifyContent: 'center',
