@@ -1,6 +1,8 @@
 # Speak Oculus
-![1484 (2)](https://github.com/user-attachments/assets/d6062586-84b2-427b-a16a-1af01fb104bd)
 
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/d6062586-84b2-427b-a16a-1af01fb104bd" width="300">
+</p>
 
 A real-time Voice AI language tutor that combines live conversation, computer vision, and spaced vocabulary tracking into a FaceTime-like mobile experience.
 
